@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flood Streamer - Магазин и Апгрейды</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', 'Arial', sans-serif; overflow: hidden; background: #000; }
+        #gameContainer { position: relative; width: 100vw; height: 100vh; transition: transform 0.1s; }
+        #gameCanvas { display: block; background: #0c0a18; }
+        #waterVignette { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 150; box-shadow: inset 0 0 150px 50px rgba(52, 152, 219, 0); transition: box-shadow 0.5s ease-out; }
+        .ui-panel { position: absolute; background: rgba(10, 20, 40, 0.8); backdrop-filter: blur(5px); padding: 15px; border-radius: 12px; z-index: 100; color: #ecf0f1; border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 4px 20px rgba(0,0,0,0.3); -webkit-user-select: none; user-select: none; }
+        #stats { top: 20px; left: 20px; }
+        #chat { top: 20px; right: 20px; width: 320px; height: 50vh; min-height: 300px; max-height: 500px; display: flex; flex-direction: column; }
+        #controls { bottom: 20px; left: 20px; font-size: 14px; max-width: 300px; }
+        #chatMessages { flex-grow: 1; overflow-y: auto; font-size: 14px; margin-bottom: 10px; scroll-behavior: smooth; }
+        #viewerCount { padding: 8px 12px; font-size: 14px; font-weight: bold; text-align: center; background: #c0392b; border-radius: 8px; margin-bottom: 10px;}
+        #gameOver { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(10, 20, 40, 0.9); backdrop-filter: blur(10px); padding: 40px; border-radius: 15px; text-align: center; border: 1px solid rgba(255, 255, 255, 0.2); z-index: 200; display: none; color: white; flex-direction: column; align-items: center; }
+        .btn { background: #3498db; color: white; border: none; padding: 12px 25px; border-radius: 8px; cursor: pointer; font-size: 18px; margin-top: 20px; transition: background 0.2s, opacity 0.2s; font-weight: bold; }
+        .btn:hover { background: #5dade2; }
+        .btn:disabled { background: #566573; cursor: not-allowed; opacity: 0.7; }
+        .shop-container { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+        .btn-shop { width: 100%; text-align: left; background: #8e44ad; font-size: 14px; padding: 10px 15px; margin-top: 0; display: flex; justify-content: space-between; align-items: center; }
+        .btn-shop:hover:not(:disabled) { background: #9b59b6; }
+        .price { font-weight: normal; opacity: 0.8; }
+        .chat-message { margin-bottom: 8px; padding: 6px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.07); line-height: 1.4; }
+        .donation { color: #f1c40f; font-weight: bold; border-left: 4px solid #f1c40f; background: rgba(241, 196, 15, 0.1); }
+        .milestone { color: #2ecc71; font-weight: bold; border-left: 4px solid #2ecc71; background: rgba(46, 204, 113, 0.1); }
+        .troll-message { color: #e67e22; border-left: 4px solid #e67e22; background: rgba(230, 126, 34, 0.1); }
+        .water-message { color: #3498db; border-left: 4px solid #3498db; background: rgba(52, 152, 219, 0.1); }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="waterVignette"></div>
+        <div id="stats" class="ui-panel">
+            <div id="heightDisplay">🔝 Высота: 0м</div>
+            <div id="balanceDisplay">💰 Баланс: 0Р</div>
+        </div>
+        <div id="chat" class="ui-panel">
+            <div id="viewerCount"></div>
+            <div id="chatMessages"></div>
+        </div>
+        <div id="controls" class="ui-panel">
+            <div><b>🎮 Управление:</b></div>
+            <div>A/D или ←/→ - Движение</div>
+            <div>W, SPACE или ↑ - Прыжок</div>
+            <div style="margin-top: 10px;"><b>🛒 Магазин:</b></div>
+            <div class="shop-container">
+                <button id="buySpeedBtn" class="btn btn-shop" onclick="buyItem('speed')"><span>🚀 Гагарин-Драйв</span> <span class="price">1500Р</span></button>
+                <button id="buySlowWaterBtn" class="btn btn-shop" onclick="buyItem('slowWater')"><span>❄️ Заморозка Воды</span> <span class="price">2500Р</span></button>
+                <button id="buyTrollBtn" class="btn btn-shop" onclick="buyItem('troll')"><span>😈 Нанять тролля</span> <span class="price">1000Р</span></button>
+            </div>
+        </div>
+        <div id="gameOver" class="ui-panel">
+            <h2 style="color: #e74c3c;">ПОТОП!</h2>
+            <p>Вас настигла мутная вода.</p>
+            <p id="finalScore" style="font-size: 28px; margin: 15px 0; font-weight: bold; color: #fff;"></p>
+            <button class="btn" onclick="resetGame()">🚀 Новый Стрим</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameContainer = document.getElementById('gameContainer');
+        const waterVignette = document.getElementById('waterVignette');
+
+        // --- КОНСТАНТЫ ИГРЫ ---
+        const GRAVITY = 0.45;
+        const PLAYER_SPEED_NORMAL = 6;
+        const PLAYER_SPEED_BOOST = 1.6;
+        const JUMP_FORCE = 13;
+        const WATER_RISE_SPEED = 0.22;
+        const WATER_SLOW_MULTIPLIER = 0.5;
+        const WATER_WARNING_DISTANCE = 400;
+        const CAMERA_LERP_FACTOR = 0.08;
+        const SHOP_ITEMS = {
+            troll:     { cost: 1000, cooldown: 10000, duration: 0 },
+            speed:     { cost: 1500, cooldown: 20000, duration: 10000 },
+            slowWater: { cost: 2500, cooldown: 30000, duration: 7000 }
+        };
+        const PLAYER_WIDTH = 30; const PLAYER_HEIGHT = 40; const BOUNCY_JUMP_MULTIPLIER = 1.6; const PLATFORM_HEIGHT = 20; const MIN_PLATFORM_WIDTH = 90; const MAX_PLATFORM_WIDTH = 180; const MAX_Y_OFFSET = 120; const MIN_Y_OFFSET = 50; const MAX_X_OFFSET = 220; const PLAYER_SQUASH_RECOVER = 0.15; const PARTICLE_GRAVITY = 0.1; const COLOR_PLAYER = '#e74c3c'; const COLOR_PLATFORM_NORMAL = '#4e5d6c'; const COLOR_PLATFORM_BOUNCY = '#3498db'; const COLOR_PLATFORM_GOLDEN = '#f1c40f'; const COLOR_PLATFORM_USED = '#8e44ad';
+
+        let game = {};
+
+        const chatDatabase = {
+            generic: ["Ого, как высоко!", "Не упади!", "Красивый прыжок!", "EZ", "У тебя получится!", "Лайк за стрим 👍", "Привет из 2024!", "А что за игра?", "Смотрю на работе)", "Осторожнее!", "Топ контент", "Так держать!", "Я бы так не смог", "Адреналин!", "Чисто на реакции", "Давай, жми!", "Подписался", "Найс мув", "Почти..."],
+            milestone: ["Ого, уже {score} метров! 🔥", "Новый рекорд - {score}м! Поздравляю!", "Ничего себе, {score}м! Легенда!", "ВПЕРЕЕЕД! {score}м!", "Это было эпично, {score}м!"],
+            donation: ["Закинул {amount}Р на новый микрофон!", "Держи {amount}Р, удачи!", "{amount}Р на пиццу после стрима!", "Вот тебе {amount}Р, покажи класс!", "Лети к звёздам! {amount}Р на топливо."],
+            troll: ["Стрим для тех, кто любит смотреть на поднимающуюся воду.", "Ты прыгаешь или лагаешь?", "Говорят, если упасть, можно активировать Windows.", "На этом моменте я обычно засыпаю.", "Это не игра, это симулятор лифта.", "Такое чувство, что у тебя пинг до клавиатуры 200.", "Продал бы душу за донат, но кто ж ее купит.", "На фоне лучше бы Моргенштерна включил."],
+            waterJokes: ["ВОДААА! БЕГИ!", "Кажется, штаны намочил)", "Скоро аквадискотека!", "Мутная вода, как твои шансы...", "Выше, давай выше!", "Не время плавать!", "Она тебя догонит!", "Держись подальше от этой жижи!"]
+        };
+
+        function resetGame() {
+            game = {
+                player: { x: canvas.width / 2, y: canvas.height - 100, width: PLAYER_WIDTH, height: PLAYER_HEIGHT, velX: 0, velY: 0, onGround: false, squash: 1 },
+                platforms: [], cameraY: 0, waterY: canvas.height + 300,
+                score: 0, nextMilestone: 100, balance: 1500,
+                viewers: Math.floor(1000 + Math.random() * 500),
+                isRunning: true, keys: {},
+                stars: Array.from({ length: 200 }, () => ({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, radius: Math.random() * 1.5, speed: Math.random() * 0.2 + 0.1 })),
+                particles: [], lastChatTime: 0, lastDonationTime: 0,
+                cooldowns: { troll: 0, speed: 0, slowWater: 0 },
+                effects: { speedEnd: 0, slowWaterEnd: 0 },
+                frame: 0,
+            };
+            const startPlatform = { x: 0, y: canvas.height - 60, width: canvas.width, type: 'normal', color: COLOR_PLATFORM_NORMAL };
+            game.platforms.push(startPlatform);
+            generateInitialPlatforms();
+            game.player.y = startPlatform.y - game.player.height;
+            game.cameraY = game.player.y;
+
+            document.getElementById('gameOver').style.display = 'none';
+            document.getElementById('chatMessages').innerHTML = '';
+            spawnChatMessage("Стрим онлайн! Теперь с магазином!", "milestone");
+
+            gameLoop();
+        }
+
+        function buyItem(itemName) {
+            const item = SHOP_ITEMS[itemName];
+            const now = Date.now();
+            if (game.balance >= item.cost && now > game.cooldowns[itemName]) {
+                game.balance -= item.cost;
+                game.cooldowns[itemName] = now + item.cooldown;
+                
+                if (item.duration > 0) {
+                    game.effects[itemName + 'End'] = now + item.duration;
+                }
+
+                if (itemName === 'troll') {
+                    const msg = chatDatabase.troll[Math.floor(Math.random() * chatDatabase.troll.length)];
+                    spawnChatMessage(msg, 'troll-message');
+                    game.viewers = Math.max(10, game.viewers - Math.floor(Math.random() * 50 + 20));
+                }
+            }
+        }
+        
+        function update() {
+            if (!game.isRunning) return;
+            const now = Date.now();
+            game.frame++;
+            const p = game.player;
+
+            const currentSpeed = (now < game.effects.speedEnd) ? PLAYER_SPEED_NORMAL * PLAYER_SPEED_BOOST : PLAYER_SPEED_NORMAL;
+            if (game.keys['KeyA'] || game.keys['ArrowLeft']) p.velX = -currentSpeed;
+            else if (game.keys['KeyD'] || game.keys['ArrowRight']) p.velX = currentSpeed;
+            else p.velX *= 0.9;
+            
+            if ((game.keys['KeyW'] || game.keys['Space'] || game.keys['ArrowUp']) && p.onGround) {
+                p.velY = -JUMP_FORCE; p.onGround = false; p.squash = 1.4;
+                spawnParticles(p.x + p.width / 2, p.y + p.height, 8, 'rgba(236, 240, 241, 0.7)', -2);
+            }
+            p.velY += GRAVITY; p.x += p.velX; p.y += p.velY; p.onGround = false;
+
+            // --- ВОССТАНОВЛЕННЫЙ БЛОК ---
+            for (const platform of game.platforms) {
+                if (p.velY > 0 && p.x + p.width > platform.x && p.x < platform.x + platform.width && p.y + p.height > platform.y && p.y + p.height - p.velY <= platform.y) {
+                    p.y = platform.y - p.height; p.velY = 0; p.onGround = true; p.squash = 0.6;
+                    spawnParticles(p.x + p.width / 2, p.y + p.height, 12, platform.color, 0);
+                    
+                    if (platform.type === 'bouncy') {
+                        p.velY = -JUMP_FORCE * BOUNCY_JUMP_MULTIPLIER; p.onGround = false; p.squash = 1.5;
+                        spawnParticles(p.x + p.width / 2, p.y + p.height, 20, platform.color, -5);
+                    }
+                    if (platform.type === 'golden') {
+                        game.balance += 500; platform.type = 'used_golden'; platform.color = COLOR_PLATFORM_USED;
+                        spawnParticles(p.x + p.width / 2, p.y + p.height, 30, COLOR_PLATFORM_GOLDEN, -5);
+                    }
+                }
+            }
+            // --- КОНЕЦ ВОССТАНОВЛЕННОГО БЛОКА ---
+
+            p.squash += (1 - p.squash) * PLAYER_SQUASH_RECOVER;
+            if (p.x > canvas.width) p.x = 0; if (p.x + p.width < 0) p.x = canvas.width;
+            
+            const targetCameraY = p.y - canvas.height * 0.55;
+            game.cameraY += (targetCameraY - game.cameraY) * CAMERA_LERP_FACTOR;
+            
+            const currentWaterSpeed = (now < game.effects.slowWaterEnd) ? WATER_RISE_SPEED * WATER_SLOW_MULTIPLIER : WATER_RISE_SPEED;
+            game.waterY -= currentWaterSpeed;
+            
+            if (p.y + p.height > game.waterY) { game.isRunning = false; }
+            
+            if (game.platforms.length > 0 && p.y < game.platforms[game.platforms.length - 1].y + canvas.height) {
+                game.platforms.push(generateNextPlatform(game.platforms[game.platforms.length - 1]));
+            }
+            game.platforms = game.platforms.filter(plat => plat.y > game.cameraY - 100);
+            game.score = Math.max(game.score, Math.floor((canvas.height - 60 - p.y) / 10));
+            if (game.score > game.nextMilestone) {
+                const msg = chatDatabase.milestone[Math.floor(Math.random() * chatDatabase.milestone.length)].replace('{score}', game.nextMilestone);
+                spawnChatMessage(msg, "milestone"); game.nextMilestone *= 2; game.viewers += Math.floor(50 + Math.random() * 100);
+            }
+            updateChat();
+            updateWaterEffects();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.save();
+            ctx.translate(0, -game.cameraY);
+            
+            ctx.fillStyle = 'rgba(236, 240, 241, 0.8)';
+            game.stars.forEach(star => { const starY = ((star.y - game.cameraY * star.speed) % (canvas.height + 20)) - 20; ctx.beginPath(); ctx.arc(star.x, starY, star.radius, 0, Math.PI * 2); ctx.fill(); });
+            
+            for (const platform of game.platforms) { ctx.fillStyle = platform.color; ctx.fillRect(platform.x, platform.y, platform.width, PLATFORM_HEIGHT); }
+            
+            const p = game.player;
+            const w = p.width / p.squash; const h = p.height * p.squash;
+            const x = p.x - (w - p.width) / 2; const y = p.y - (h - p.height);
+            ctx.fillStyle = Date.now() < game.effects.speedEnd ? '#f39c12' : COLOR_PLAYER;
+            ctx.fillRect(x, y, w, h);
+            
+            updateAndDrawParticles();
+            
+            const waterGradient = ctx.createLinearGradient(0, game.waterY, 0, game.waterY + 200);
+            const waterIsSlowed = Date.now() < game.effects.slowWaterEnd;
+            waterGradient.addColorStop(0, waterIsSlowed ? 'rgba(174, 214, 241, 0.9)' : 'rgba(52, 152, 219, 0.9)');
+            waterGradient.addColorStop(1, waterIsSlowed ? 'rgba(133, 193, 233, 1)' : 'rgba(26, 118, 158, 1)');
+            ctx.fillStyle = waterGradient;
+            
+            ctx.beginPath();
+            ctx.moveTo(0, game.waterY);
+            for (let i = 0; i <= canvas.width; i += 10) { const waveY = Math.sin(game.frame * 0.05 + i * 0.02) * 5; ctx.lineTo(i, game.waterY + waveY); }
+            ctx.lineTo(canvas.width, canvas.height * 2 + game.cameraY);
+            ctx.lineTo(0, canvas.height * 2 + game.cameraY);
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.restore();
+        }
+
+        function updateUI() {
+            document.getElementById('heightDisplay').textContent = `🔝 Высота: ${game.score}м`;
+            document.getElementById('balanceDisplay').textContent = `💰 Баланс: ${Math.floor(game.balance)}Р`;
+            document.getElementById('viewerCount').textContent = `👥 Зрители: ${game.viewers.toLocaleString()}`;
+            const now = Date.now();
+
+            for (const itemName in SHOP_ITEMS) {
+                const btn = document.getElementById(`buy${itemName.charAt(0).toUpperCase() + itemName.slice(1)}Btn`);
+                const item = SHOP_ITEMS[itemName];
+                const cdEnd = game.cooldowns[itemName];
+                const effectEnd = game.effects[itemName + 'End'] || 0;
+                const originalText = { troll: '😈 Нанять тролля', speed: '🚀 Гагарин-Драйв', slowWater: '❄️ Заморозка Воды' };
+
+                btn.disabled = false;
+                btn.querySelector('span:first-child').textContent = originalText[itemName];
+
+                if (now < effectEnd) {
+                    btn.disabled = true;
+                    btn.querySelector('span:first-child').textContent = `АКТИВНО (${Math.ceil((effectEnd - now) / 1000)}с)`;
+                } else if (now < cdEnd) {
+                    btn.disabled = true;
+                    btn.querySelector('span:first-child').textContent = `Кулдаун (${Math.ceil((cdEnd - now) / 1000)}с)`;
+                } else if (game.balance < item.cost) {
+                    btn.disabled = true;
+                }
+            }
+        }
+        
+        function gameLoop() {
+            if (!game.isRunning) {
+                document.getElementById('gameOver').style.display = 'flex';
+                document.getElementById('finalScore').textContent = `🔝 ${game.score}м`;
+                gameContainer.style.transform = 'translate(0, 0)';
+                return;
+            }
+            update();
+            draw();
+            updateUI();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // --- Вспомогательные функции ---
+        function generateInitialPlatforms() { let lastPlatform = game.platforms[0]; while(lastPlatform.y > -canvas.height) { lastPlatform = generateNextPlatform(lastPlatform); game.platforms.push(lastPlatform); }}
+        function generateNextPlatform(basePlatform) { const p = {}; const y_off = MIN_Y_OFFSET + Math.random() * (MAX_Y_OFFSET - MIN_Y_OFFSET); p.y = basePlatform.y - y_off; const x_dir = Math.random() < 0.5 ? -1 : 1; const x_off = (MAX_X_OFFSET / 2) + Math.random() * (MAX_X_OFFSET / 2); let nX = basePlatform.x + (basePlatform.width / 2) + (x_off * x_dir); p.width = MIN_PLATFORM_WIDTH + Math.random() * (MAX_PLATFORM_WIDTH - MIN_PLATFORM_WIDTH); nX -= p.width / 2; p.x = Math.max(10, Math.min(nX, canvas.width - p.width - 10)); const rand = Math.random(); if (rand < 0.1) { p.type = 'bouncy'; p.color = COLOR_PLATFORM_BOUNCY; } else if (rand < 0.13) { p.type = 'golden'; p.color = COLOR_PLATFORM_GOLDEN; } else { p.type = 'normal'; p.color = COLOR_PLATFORM_NORMAL; } return p; }
+        function spawnParticles(x,y,c,col,iVy){for(let i=0;i<c;i++){game.particles.push({x,y,vx:(Math.random()-.5)*5,vy:(Math.random()-.5)*3+iVy,life:Math.random()*40+20,color:col})}}
+        function updateAndDrawParticles() { for (let i = game.particles.length - 1; i >= 0; i--) { const p = game.particles[i]; p.life--; if(p.life <= 0) { game.particles.splice(i, 1); continue; } p.x += p.vx; p.y += p.vy; p.vy += PARTICLE_GRAVITY; ctx.fillStyle = p.color; ctx.globalAlpha = p.life / 40; ctx.fillRect(p.x, p.y, 3, 3); } ctx.globalAlpha = 1; }
+        function spawnChatMessage(msg, type = 'generic') { const cB=document.getElementById('chatMessages'); const mD=document.createElement('div'); mD.className=`chat-message ${type}`; mD.innerHTML=`<b style="opacity:0.7;">User${Math.floor(Math.random()*900+100)}:</b> ${msg}`; cB.appendChild(mD); if(cB.children.length>25){cB.removeChild(cB.firstChild)} cB.scrollTop=cB.scrollHeight; }
+        function updateChat(){const n=Date.now();if(n-game.lastChatTime>2e3+Math.random()*1500){game.lastChatTime=n;const wD=game.waterY-(game.player.y+game.player.height);if(Math.random()<.1&&n-game.lastDonationTime>15e3){const a=[50,100,250,500][Math.floor(Math.random()*4)];const m=chatDatabase.donation[Math.floor(Math.random()*chatDatabase.donation.length)].replace('{amount}',a);spawnChatMessage(m,"donation");game.balance+=a;game.lastDonationTime=n}else if(wD<WATER_WARNING_DISTANCE&&Math.random()<.65){const m=chatDatabase.waterJokes[Math.floor(Math.random()*chatDatabase.waterJokes.length)];spawnChatMessage(m,'water-message')}else{const m=chatDatabase.generic[Math.floor(Math.random()*chatDatabase.generic.length)];spawnChatMessage(m)}}}
+        function updateWaterEffects(){const wD=game.waterY-(game.player.y+game.player.height);if(wD<WATER_WARNING_DISTANCE){const i=1-(wD/WATER_WARNING_DISTANCE);const sX=(Math.random()-.5)*i*4;const sY=(Math.random()-.5)*i*4;gameContainer.style.transform=`translate(${sX}px,${sY}px)`;waterVignette.style.boxShadow=`inset 0 0 150px 50px rgba(52,152,219,${i*.4})`}else{gameContainer.style.transform='translate(0,0)';waterVignette.style.boxShadow='inset 0 0 150px 50px rgba(52,152,219,0)'}}
+
+        // --- Инициализация ---
+        window.addEventListener('keydown', (e) => { if(game && game.keys) game.keys[e.code] = true; });
+        window.addEventListener('keyup', (e) => { if(game && game.keys) game.keys[e.code] = false; });
+        window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; resetGame(); });
+        canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+        resetGame();
+    </script>
+</body>
+</html>
